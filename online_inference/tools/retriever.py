@@ -10,7 +10,7 @@ import threading
 import requests
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import tqdm as tqdm
 from collections import defaultdict
 from transformers import AutoModel
@@ -39,13 +39,19 @@ class SemanticRetriever :
         reranker_path: str = None,
         save_path: str = "./retrieval_result/embedding.pkl"
     ) -> None:
-        self.embedding_model = Embedder(llm_path)
-        self.reranker = Reranker(reranker_path)
-
-        if os.path.exists(save_path) :
+        # If embeddings are precomputed, load them first and avoid creating heavy models
+        # (this prevents unnecessary model downloads or local path validation errors)
+        if os.path.exists(save_path):
             doc_embeddings, self.chunks, self.chunk_file_index = self.load_embeddings(save_path)
             self.chunk_index = {idx: ch for idx, ch in enumerate(self.chunks)}
-        else :
+            # Only create embedder/reranker if we need to embed more documents later
+            self.embedding_model = None
+            self.reranker = None
+        else:
+            # No precomputed embeddings: instantiate models and compute embeddings
+            self.embedding_model = Embedder(llm_path) if llm_path else None
+            self.reranker = Reranker(reranker_path) if reranker_path else None
+
             self.chunks = chunks
             self.chunk_index = chunk_index
             self.chunk_file_index = chunk_file_index
@@ -55,7 +61,15 @@ class SemanticRetriever :
         self.index_lock = threading.RLock()
 
         print("embedding size", doc_embeddings.shape)
-        self.res = faiss.StandardGpuResources()
+        # Try to use GPU resources if available; otherwise fall back to CPU index
+        try:
+            self.res = faiss.StandardGpuResources()
+            self.use_gpu = True
+        except Exception:
+            # faiss may be the CPU-only build without GPU support
+            self.res = None
+            self.use_gpu = False
+
         self.index_IP = self.build_index(doc_embeddings)
 
     def embed_doc(self, chunks: List[str], batch_size: int = 512, save_path: str = None) -> Any :
@@ -133,15 +147,22 @@ class SemanticRetriever :
         print("Building Index.")
         with self.index_lock :
             _, dim = dense_vector.shape
-            index_IP = faiss.IndexFlatIP(dim)
-            co = faiss.GpuClonerOptions()
+            # CPU index (works for all installs)
+            index_cpu = faiss.IndexFlatIP(dim)
+            index_cpu.add(dense_vector)
 
-            # make it to gpu index
-            # index_gpu = faiss.index_cpu_to_gpu(provider=self.res, device=2, index=index_IP, options=co)
-            index_gpu = index_IP
-            index_gpu.add(dense_vector)
+            # If GPU is available and faiss provides GPU helpers, convert to GPU index
+            if getattr(self, 'use_gpu', False) and hasattr(faiss, 'index_cpu_to_gpu'):
+                try:
+                    co = faiss.GpuClonerOptions()
+                    # use device 0 by default
+                    index_gpu = faiss.index_cpu_to_gpu(self.res, 0, index_cpu, co)
+                    return index_gpu
+                except Exception as e:
+                    print(f"⚠️ Faiss GPU conversion failed, falling back to CPU index: {e}")
+                    return index_cpu
 
-            return index_gpu
+            return index_cpu
 
     def retrieve(self, query, recall_num, rerank_num) :
         docs, ori_file_name = self.recall(query, recall_num)
@@ -189,14 +210,46 @@ class MixedDocRetriever :
 
     def load_hybrid_dataset(self, doc_dir_path: str, excel_dir_path: str) -> Dict[str, List[str]] :
         all_docs = defaultdict(list)
+        # Only consider supported Excel file extensions. Skip other files (e.g., .json) that may be present.
+        supported_exts = ('.xlsx', '.xls', '.xlsm', '.xltx', '.xltm')
         for file in tqdm(os.listdir(excel_dir_path)) :
-            content = excel_to_markdown(os.path.join(excel_dir_path, file))
+            if not file.lower().endswith(supported_exts):
+                # skip non-excel files
+                # print a short message for visibility
+                # (useful when directories contain mixed file types)
+                # tqdm will already show progress, so keep this minimal
+                # but still helpful during troubleshooting
+                # e.g., 'table_1_children_enrolled_in.json' leaked into the folder
+                # which would cause openpyxl.InvalidFileException
+                # We choose to skip and continue.
+                #
+                # Note: we intentionally don't raise here.
+                #
+                continue
+            file_path = os.path.join(excel_dir_path, file)
+            try:
+                content = excel_to_markdown(file_path)
+            except Exception as e:
+                print(f"⚠️ Skipping file {file}: {e}")
+                continue
             excel_content = content
             all_docs[file] = excel_content
         
+        # Only load JSON/JSONL files from doc_dir; skip binaries (e.g., embedding.pkl)
         for file in tqdm(os.listdir(doc_dir_path)) :
-            with open(os.path.join(doc_dir_path, file), 'r', encoding="utf-8") as fin :
-                data_split = json.load(fin)
+            if not file.lower().endswith(('.json', '.jsonl')):
+                continue
+            file_path = os.path.join(doc_dir_path, file)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as fin :
+                    data_split = json.load(fin)
+            except UnicodeDecodeError:
+                print(f"⚠️ Skipping non-utf8 file in doc_dir: {file}")
+                continue
+            except Exception as e:
+                print(f"⚠️ Failed to load {file}: {e}")
+                continue
+
             key_value_doc = ''
             for key, item in data_split.items() :
                 key_value_doc += f"{key} {item}\n"

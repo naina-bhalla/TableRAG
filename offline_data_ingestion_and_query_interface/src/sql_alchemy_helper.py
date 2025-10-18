@@ -35,6 +35,7 @@ class SQL_Alchemy_Helper:
             pool_size=10,
             max_overflow=20
         )
+        
 
     def execute_sql(self, sql, args=None):
         """

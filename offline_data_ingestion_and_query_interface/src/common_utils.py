@@ -1,18 +1,24 @@
 import re
+import re
 import json
 import hashlib
+import os
 from sql_alchemy_helper import SQL_Alchemy_Helper
 
+# Resolve base directory (the parent of this src folder)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+SCHEMA_DIR = os.path.join(BASE_DIR, 'data', 'schema')
+DATABASE_CONFIG_DIR = os.path.join(BASE_DIR, 'config', 'database_config.json')
 
-SCHEMA_DIR = '../data/schema'
-DATABASE_CONFIG_DIR = '../config/database_config.json'
+# Load database config using the absolute path
+if not os.path.exists(DATABASE_CONFIG_DIR):
+    raise FileNotFoundError(f"Database config not found at: {DATABASE_CONFIG_DIR}")
 
 database_config = json.load(open(DATABASE_CONFIG_DIR, 'r', encoding='utf-8'))
 sql_alchemy_helper = SQL_Alchemy_Helper(database_config)
 
 
 def transfer_name(original_name):
-    # 去除扩展名
     name = original_name.split('.')[0]
     
     # 替换非法字符为下划线

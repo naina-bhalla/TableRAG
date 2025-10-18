@@ -1,10 +1,11 @@
+import os
 v3_config = {
-    "url": "url for deepseek_v3",
-    "model": "deepseek_chat",
-    "api_key": "api_key"
+    "url": "https://api.cohere.ai/v1/generate",
+    "model": "command",
+    "api_key": os.getenv("COHERE_API_KEY"),
 }
 
-sql_service_url = 'url for sql service' 
+sql_service_url = 'http://127.0.0.1:5000/' 
 
 
 config_mapping = {

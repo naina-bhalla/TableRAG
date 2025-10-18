@@ -2,17 +2,21 @@ import requests
 import time
 import json
 from typing import Optional, Dict, Any
+import os
+
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
 model_request_config = {
-    "deepseek-v3": {
-        "endpoint": "https://api.deepseek.com/v1/completions",
+    "cohere-command": {
+        "endpoint": "https://api.cohere.ai/v1/generate",
         "headers": {
-            "Authorization": "Bearer sk-xxx",
+            "Authorization": f"Bearer {COHERE_API_KEY}",
             "Content-Type": "application/json"
         },
-        "model": "deepseek-v3"
+        "model": "command"
     }
 }
+
 
 def call_llm_api(
     endpoint: str,

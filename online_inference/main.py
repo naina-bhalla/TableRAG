@@ -16,6 +16,7 @@ import traceback
 import copy
 import time
 from prompt import *
+import logging
 
 
 MAX_ITER = 5
@@ -31,12 +32,24 @@ class TableRAG() :
         self.config = _args
         self.max_iter = min(_args.max_iter, MAX_ITER)
         self.cnt = 0
+        # If precomputed embeddings exist in the online_inference folder, don't pass local model
+        # paths to MixedDocRetriever to avoid HuggingFace trying to resolve invalid repo ids.
+        embedding_path = os.path.join(os.path.dirname(__file__), 'embedding.pkl')
+        if os.path.exists(embedding_path):
+            llm_path = None
+            reranker_path = None
+            save_path = embedding_path
+        else:
+            llm_path = os.path.join(_args.bge_dir, "bge-m3")
+            reranker_path = os.path.join(_args.bge_dir, "bge-reranker-v2-m3")
+            save_path = os.path.join(os.path.dirname(__file__), 'embedding.pkl')
+
         self.retriever = MixedDocRetriever(
             doc_dir_path=_args.doc_dir,
             excel_dir_path=_args.excel_dir,
-            llm_path=os.path.join(_args.bge_dir, "bge-m3"),
-            reranker_path=os.path.join(_args.bge_dir, "bge-reranker-v2-m3"),
-            save_path="./embedding.pkl"
+            llm_path=llm_path,
+            reranker_path=reranker_path,
+            save_path=save_path
         )
         # self.repo_id = self.config.get("repo_id", "")
         self.function_lock = threading.Lock()
@@ -242,7 +255,15 @@ class TableRAG() :
 
         else :
             pre_questions = {}
-        src_data = read_in(file_path)
+        # support both JSON array files and JSONL (one JSON object per line)
+        if file_path and file_path.lower().endswith('.jsonl'):
+            src_data = read_in_lines(file_path)
+        else:
+            try:
+                src_data = read_in(file_path)
+            except Exception:
+                # fallback to line-based JSON parsing
+                src_data = read_in_lines(file_path)
 
         def process_data(case) :
             if case["question"] in pre_questions :
@@ -296,7 +317,8 @@ if __name__ == "__main__" :
     parser.add_argument('--max_iter', type=int, default=5)
     parser.add_argument('--rerun', type=bool, default=False)
     _args, _unparsed = parser.parse_known_args()
-    logger.init_logger('./logs/test.log', logging.INFO)
+    # initialize logger and assign to variable
+    logger = init_logger('./logs/test.log', logging.INFO)
 
     agent = TableRAG(_args)
     start_time = time.time()

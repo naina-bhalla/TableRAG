@@ -170,5 +170,4 @@ def parse_excel_file_and_insert_to_db(excel_file_outer_dir: str):
 
 
 if __name__ == "__main__":
-    parse_excel_file_and_insert_to_db('../dataset/hybridqa/dev_excel/')
-
+    parse_excel_file_and_insert_to_db('../dataset/All India Tables/')
